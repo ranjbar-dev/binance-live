@@ -2,52 +2,87 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/binance-live/internal/database"
+	"github.com/binance-live/internal/db"
 	"github.com/binance-live/internal/models"
 )
 
 // TickerRepository handles ticker data operations
 type TickerRepository struct {
-	db *database.Database
+	database *database.Database
+	queries  *db.Queries
 }
 
 // NewTickerRepository creates a new ticker repository
-func NewTickerRepository(db *database.Database) *TickerRepository {
-	return &TickerRepository{db: db}
+func NewTickerRepository(database *database.Database) *TickerRepository {
+	return &TickerRepository{
+		database: database,
+		queries:  db.New(database.Pool),
+	}
 }
 
 // Insert inserts a ticker record
 func (r *TickerRepository) Insert(ctx context.Context, ticker *models.Ticker) error {
-	query := `
-		INSERT INTO tickers (
-			symbol, timestamp, price, bid_price, bid_qty, ask_price, ask_qty,
-			volume_24h, quote_volume_24h, price_change_24h, price_change_percent_24h,
-			high_24h, low_24h, trades_count_24h
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		ON CONFLICT (symbol, timestamp) DO UPDATE SET
-			price = EXCLUDED.price,
-			bid_price = EXCLUDED.bid_price,
-			bid_qty = EXCLUDED.bid_qty,
-			ask_price = EXCLUDED.ask_price,
-			ask_qty = EXCLUDED.ask_qty,
-			volume_24h = EXCLUDED.volume_24h,
-			quote_volume_24h = EXCLUDED.quote_volume_24h,
-			price_change_24h = EXCLUDED.price_change_24h,
-			price_change_percent_24h = EXCLUDED.price_change_percent_24h,
-			high_24h = EXCLUDED.high_24h,
-			low_24h = EXCLUDED.low_24h,
-			trades_count_24h = EXCLUDED.trades_count_24h
-	`
+	// Convert nullable pointers to sql.NullFloat64 and sql.NullInt32
+	var bidPrice, bidQty, askPrice, askQty sql.NullFloat64
+	var volume24h, quoteVolume24h, priceChange24h, priceChangePercent24h sql.NullFloat64
+	var high24h, low24h sql.NullFloat64
+	var tradesCount24h sql.NullInt32
 
-	_, err := r.db.Pool.Exec(ctx, query,
-		ticker.Symbol, ticker.Timestamp, ticker.Price,
-		ticker.BidPrice, ticker.BidQty, ticker.AskPrice, ticker.AskQty,
-		ticker.Volume24h, ticker.QuoteVolume24h, ticker.PriceChange24h,
-		ticker.PriceChangePercent24h, ticker.High24h, ticker.Low24h,
-		ticker.TradesCount24h,
-	)
+	if ticker.BidPrice != nil {
+		bidPrice = sql.NullFloat64{Float64: *ticker.BidPrice, Valid: true}
+	}
+	if ticker.BidQty != nil {
+		bidQty = sql.NullFloat64{Float64: *ticker.BidQty, Valid: true}
+	}
+	if ticker.AskPrice != nil {
+		askPrice = sql.NullFloat64{Float64: *ticker.AskPrice, Valid: true}
+	}
+	if ticker.AskQty != nil {
+		askQty = sql.NullFloat64{Float64: *ticker.AskQty, Valid: true}
+	}
+	if ticker.Volume24h != nil {
+		volume24h = sql.NullFloat64{Float64: *ticker.Volume24h, Valid: true}
+	}
+	if ticker.QuoteVolume24h != nil {
+		quoteVolume24h = sql.NullFloat64{Float64: *ticker.QuoteVolume24h, Valid: true}
+	}
+	if ticker.PriceChange24h != nil {
+		priceChange24h = sql.NullFloat64{Float64: *ticker.PriceChange24h, Valid: true}
+	}
+	if ticker.PriceChangePercent24h != nil {
+		priceChangePercent24h = sql.NullFloat64{Float64: *ticker.PriceChangePercent24h, Valid: true}
+	}
+	if ticker.High24h != nil {
+		high24h = sql.NullFloat64{Float64: *ticker.High24h, Valid: true}
+	}
+	if ticker.Low24h != nil {
+		low24h = sql.NullFloat64{Float64: *ticker.Low24h, Valid: true}
+	}
+	if ticker.TradesCount24h != nil {
+		tradesCount24h = sql.NullInt32{Int32: int32(*ticker.TradesCount24h), Valid: true}
+	}
+
+	err := r.queries.InsertTicker(ctx, db.InsertTickerParams{
+		Symbol:                ticker.Symbol,
+		Timestamp:             ticker.Timestamp,
+		Price:                 ticker.Price,
+		BidPrice:              bidPrice,
+		BidQty:                bidQty,
+		AskPrice:              askPrice,
+		AskQty:                askQty,
+		Volume24h:             volume24h,
+		QuoteVolume24h:        quoteVolume24h,
+		PriceChange24h:        priceChange24h,
+		PriceChangePercent24h: priceChangePercent24h,
+		High24h:               high24h,
+		Low24h:                low24h,
+		TradesCount24h:        tradesCount24h,
+	})
 
 	if err != nil {
 		return fmt.Errorf("failed to insert ticker: %w", err)
@@ -56,55 +91,136 @@ func (r *TickerRepository) Insert(ctx context.Context, ticker *models.Ticker) er
 	return nil
 }
 
-// BatchInsert inserts multiple ticker records
+// BatchInsert inserts multiple ticker records with improved transaction management
 func (r *TickerRepository) BatchInsert(ctx context.Context, tickers []models.Ticker) error {
 	if len(tickers) == 0 {
 		return nil
 	}
 
-	tx, err := r.db.Pool.Begin(ctx)
+	// For large batches, process in smaller chunks to avoid long-running transactions
+	const maxBatchSize = 100 // Further reduced for better connection management
+	if len(tickers) > maxBatchSize {
+		return r.batchInsertChunked(ctx, tickers, maxBatchSize)
+	}
+
+	return r.executeBatchInsert(ctx, tickers)
+}
+
+// batchInsertChunked processes large batches in smaller chunks with delays
+func (r *TickerRepository) batchInsertChunked(ctx context.Context, tickers []models.Ticker, chunkSize int) error {
+	for i := 0; i < len(tickers); i += chunkSize {
+		end := i + chunkSize
+		if end > len(tickers) {
+			end = len(tickers)
+		}
+
+		// Add delay between chunks to prevent connection pool exhaustion
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+
+		chunk := tickers[i:end]
+		if err := r.executeBatchInsert(ctx, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executeBatchInsert executes a batch insert with proper transaction management
+func (r *TickerRepository) executeBatchInsert(ctx context.Context, tickers []models.Ticker) error {
+	// Add timeout context to prevent long-running transactions
+	txCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	tx, err := r.database.Pool.Begin(txCtx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
 
-	query := `
-		INSERT INTO tickers (
-			symbol, timestamp, price, bid_price, bid_qty, ask_price, ask_qty,
-			volume_24h, quote_volume_24h, price_change_24h, price_change_percent_24h,
-			high_24h, low_24h, trades_count_24h
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		ON CONFLICT (symbol, timestamp) DO UPDATE SET
-			price = EXCLUDED.price,
-			bid_price = EXCLUDED.bid_price,
-			bid_qty = EXCLUDED.bid_qty,
-			ask_price = EXCLUDED.ask_price,
-			ask_qty = EXCLUDED.ask_qty,
-			volume_24h = EXCLUDED.volume_24h,
-			quote_volume_24h = EXCLUDED.quote_volume_24h,
-			price_change_24h = EXCLUDED.price_change_24h,
-			price_change_percent_24h = EXCLUDED.price_change_percent_24h,
-			high_24h = EXCLUDED.high_24h,
-			low_24h = EXCLUDED.low_24h,
-			trades_count_24h = EXCLUDED.trades_count_24h
-	`
+	// Use explicit rollback handling
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(context.Background()); rollbackErr != nil {
+				// Log rollback error but don't overwrite the original error
+			}
+		}
+	}()
+
+	// Use sqlc queries with transaction
+	txQueries := r.queries.WithTx(tx)
 
 	for _, ticker := range tickers {
-		_, err := tx.Exec(ctx, query,
-			ticker.Symbol, ticker.Timestamp, ticker.Price,
-			ticker.BidPrice, ticker.BidQty, ticker.AskPrice, ticker.AskQty,
-			ticker.Volume24h, ticker.QuoteVolume24h, ticker.PriceChange24h,
-			ticker.PriceChangePercent24h, ticker.High24h, ticker.Low24h,
-			ticker.TradesCount24h,
-		)
+		// Convert nullable pointers to sql.NullFloat64 and sql.NullInt32
+		var bidPrice, bidQty, askPrice, askQty sql.NullFloat64
+		var volume24h, quoteVolume24h, priceChange24h, priceChangePercent24h sql.NullFloat64
+		var high24h, low24h sql.NullFloat64
+		var tradesCount24h sql.NullInt32
+
+		if ticker.BidPrice != nil {
+			bidPrice = sql.NullFloat64{Float64: *ticker.BidPrice, Valid: true}
+		}
+		if ticker.BidQty != nil {
+			bidQty = sql.NullFloat64{Float64: *ticker.BidQty, Valid: true}
+		}
+		if ticker.AskPrice != nil {
+			askPrice = sql.NullFloat64{Float64: *ticker.AskPrice, Valid: true}
+		}
+		if ticker.AskQty != nil {
+			askQty = sql.NullFloat64{Float64: *ticker.AskQty, Valid: true}
+		}
+		if ticker.Volume24h != nil {
+			volume24h = sql.NullFloat64{Float64: *ticker.Volume24h, Valid: true}
+		}
+		if ticker.QuoteVolume24h != nil {
+			quoteVolume24h = sql.NullFloat64{Float64: *ticker.QuoteVolume24h, Valid: true}
+		}
+		if ticker.PriceChange24h != nil {
+			priceChange24h = sql.NullFloat64{Float64: *ticker.PriceChange24h, Valid: true}
+		}
+		if ticker.PriceChangePercent24h != nil {
+			priceChangePercent24h = sql.NullFloat64{Float64: *ticker.PriceChangePercent24h, Valid: true}
+		}
+		if ticker.High24h != nil {
+			high24h = sql.NullFloat64{Float64: *ticker.High24h, Valid: true}
+		}
+		if ticker.Low24h != nil {
+			low24h = sql.NullFloat64{Float64: *ticker.Low24h, Valid: true}
+		}
+		if ticker.TradesCount24h != nil {
+			tradesCount24h = sql.NullInt32{Int32: int32(*ticker.TradesCount24h), Valid: true}
+		}
+
+		err := txQueries.InsertTicker(txCtx, db.InsertTickerParams{
+			Symbol:                ticker.Symbol,
+			Timestamp:             ticker.Timestamp,
+			Price:                 ticker.Price,
+			BidPrice:              bidPrice,
+			BidQty:                bidQty,
+			AskPrice:              askPrice,
+			AskQty:                askQty,
+			Volume24h:             volume24h,
+			QuoteVolume24h:        quoteVolume24h,
+			PriceChange24h:        priceChange24h,
+			PriceChangePercent24h: priceChangePercent24h,
+			High24h:               high24h,
+			Low24h:                low24h,
+			TradesCount24h:        tradesCount24h,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to insert ticker: %w", err)
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(txCtx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	committed = true
 	return nil
 }

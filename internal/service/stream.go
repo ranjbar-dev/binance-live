@@ -225,8 +225,8 @@ func (s *StreamService) convertWSKlineToModel(event *binance.WSKlineEvent, symbo
 	return &models.Kline{
 		Symbol:              symbol,
 		Interval:            interval,
-		OpenTime:            time.UnixMilli(event.Kline.StartTime),
-		CloseTime:           time.UnixMilli(event.Kline.EndTime),
+		OpenTime:            event.Kline.StartTime,
+		CloseTime:           event.Kline.EndTime,
 		OpenPrice:           openPrice,
 		HighPrice:           highPrice,
 		LowPrice:            lowPrice,
@@ -236,7 +236,7 @@ func (s *StreamService) convertWSKlineToModel(event *binance.WSKlineEvent, symbo
 		TradesCount:         event.Kline.NumberOfTrades,
 		TakerBuyVolume:      takerBuyVolume,
 		TakerBuyQuoteVolume: takerBuyQuoteVolume,
-		CreatedAt:           time.Now(),
+		CreatedAt:           time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -255,7 +255,7 @@ func (s *StreamService) convertWSTickerToModel(event *binance.WSTickerEvent) (*m
 
 	return &models.Ticker{
 		Symbol:                event.Symbol,
-		Timestamp:             time.UnixMilli(event.EventTime),
+		Timestamp:             event.EventTime,
 		Price:                 price,
 		BidPrice:              &bidPrice,
 		BidQty:                &bidQty,
@@ -268,7 +268,7 @@ func (s *StreamService) convertWSTickerToModel(event *binance.WSTickerEvent) (*m
 		High24h:               &high24h,
 		Low24h:                &low24h,
 		TradesCount24h:        &event.Count,
-		CreatedAt:             time.Now(),
+		CreatedAt:             time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -278,11 +278,11 @@ func (s *StreamService) convertWSDepthToModel(event *binance.WSDepthEvent) (*mod
 
 	return &models.DepthSnapshot{
 		Symbol:       event.Symbol,
-		Timestamp:    time.UnixMilli(event.EventTime),
+		Timestamp:    event.EventTime,
 		LastUpdateID: event.FinalUpdateID,
 		Bids:         string(bidsJSON),
 		Asks:         string(asksJSON),
-		CreatedAt:    time.Now(),
+		CreatedAt:    time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -294,12 +294,12 @@ func (s *StreamService) convertWSTradeToModel(event *binance.WSAggTradeEvent) (*
 	return &models.Trade{
 		Symbol:        event.Symbol,
 		TradeID:       event.AggTradeID,
-		Timestamp:     time.UnixMilli(event.TradeTime),
+		Timestamp:     event.TradeTime,
 		Price:         price,
 		Quantity:      quantity,
 		QuoteQuantity: quoteQuantity,
 		IsBuyerMaker:  event.IsBuyerMaker,
-		CreatedAt:     time.Now(),
+		CreatedAt:     time.Now().UnixMilli(),
 	}, nil
 }
 

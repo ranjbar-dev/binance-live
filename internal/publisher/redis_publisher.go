@@ -32,8 +32,8 @@ func (p *Publisher) PublishKline(ctx context.Context, kline *models.Kline) error
 		Timestamp: kline.OpenTime,
 		Data: map[string]interface{}{
 			"interval":               kline.Interval,
-			"open_time":              kline.OpenTime.Unix(),
-			"close_time":             kline.CloseTime.Unix(),
+			"open_time":              kline.OpenTime / 1000,  // Convert milliseconds to seconds
+			"close_time":             kline.CloseTime / 1000, // Convert milliseconds to seconds
 			"open_price":             kline.OpenPrice,
 			"high_price":             kline.HighPrice,
 			"low_price":              kline.LowPrice,

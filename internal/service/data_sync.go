@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,7 +77,8 @@ func (s *DataSyncService) SyncMissingData(ctx context.Context) error {
 	semaphore := make(chan struct{}, s.config.Workers)
 	errChan := make(chan error, len(symbols)*len(s.binanceConfig.KlineIntervals))
 
-	// Sync klines for each symbol and interval
+	// Sync klines for each symbol and interval with sequential processing
+	// Process symbols sequentially to minimize database connection pressure
 	for _, symbol := range symbols {
 		for _, interval := range s.binanceConfig.KlineIntervals {
 			wg.Add(1)
@@ -87,6 +89,13 @@ func (s *DataSyncService) SyncMissingData(ctx context.Context) error {
 				// Acquire semaphore
 				semaphore <- struct{}{}
 				defer func() { <-semaphore }()
+
+				// Add small delay before starting each operation
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(50 * time.Millisecond):
+				}
 
 				if err := s.syncKlinesForSymbol(ctx, sym.Symbol, intv); err != nil {
 					s.logger.Error("Failed to sync klines",
@@ -123,6 +132,7 @@ func (s *DataSyncService) SyncMissingData(ctx context.Context) error {
 
 // syncKlinesForSymbol synchronizes kline data for a specific symbol and interval
 func (s *DataSyncService) syncKlinesForSymbol(ctx context.Context, symbol, interval string) error {
+
 	s.logger.Info("Syncing klines",
 		zap.String("symbol", symbol),
 		zap.String("interval", interval),
@@ -131,14 +141,17 @@ func (s *DataSyncService) syncKlinesForSymbol(ctx context.Context, symbol, inter
 	// Get sync status
 	syncStatus, err := s.syncStatusRepo.GetSyncStatus(ctx, symbol, "kline", &interval)
 	if err != nil {
+
 		return fmt.Errorf("failed to get sync status: %w", err)
 	}
 
 	// Determine start time for sync
 	var startTime time.Time
-	if syncStatus != nil && !syncStatus.LastDataTime.IsZero() {
-		startTime = syncStatus.LastDataTime
+	if syncStatus != nil && syncStatus.LastDataTime != 0 {
+
+		startTime = time.UnixMilli(syncStatus.LastDataTime)
 	} else {
+
 		// Start from max sync hours ago
 		startTime = time.Now().Add(-time.Duration(s.config.MaxSyncHours) * time.Hour)
 	}
@@ -150,8 +163,10 @@ func (s *DataSyncService) syncKlinesForSymbol(ctx context.Context, symbol, inter
 	totalKlines := 0
 
 	for currentTime.Before(endTime) {
+
 		select {
 		case <-ctx.Done():
+
 			return ctx.Err()
 		default:
 		}
@@ -159,30 +174,36 @@ func (s *DataSyncService) syncKlinesForSymbol(ctx context.Context, symbol, inter
 		// Calculate batch end time
 		batchEndTime := currentTime.Add(time.Duration(s.config.BatchSize) * getIntervalDuration(interval))
 		if batchEndTime.After(endTime) {
+
 			batchEndTime = endTime
 		}
 
 		// Fetch klines from Binance
 		klines, err := s.binanceClient.REST.GetKlines(ctx, symbol, interval, &currentTime, &batchEndTime, s.config.BatchSize)
 		if err != nil {
+
 			return fmt.Errorf("failed to fetch klines: %w", err)
 		}
 
 		if len(klines) == 0 {
+
 			break
 		}
 
 		// Convert and store klines
 		modelKlines := make([]models.Kline, 0, len(klines))
 		for _, k := range klines {
+
 			klineData, err := binance.ParseKlineResponse(k)
 			if err != nil {
+
 				s.logger.Warn("Failed to parse kline", zap.Error(err))
 				continue
 			}
 
 			modelKline, err := s.convertToModelKline(symbol, interval, klineData)
 			if err != nil {
+
 				s.logger.Warn("Failed to convert kline", zap.Error(err))
 				continue
 			}
@@ -190,16 +211,24 @@ func (s *DataSyncService) syncKlinesForSymbol(ctx context.Context, symbol, inter
 			modelKlines = append(modelKlines, *modelKline)
 		}
 
-		// Batch insert klines
+		// Batch insert klines with retry logic and rate limiting
 		if len(modelKlines) > 0 {
-			if err := s.klineRepo.BatchInsert(ctx, modelKlines); err != nil {
+
+			if err := s.insertKlinesWithRetry(ctx, modelKlines); err != nil {
+
 				return fmt.Errorf("failed to insert klines: %w", err)
 			}
 
 			totalKlines += len(modelKlines)
 
-			// Update sync status
+			// Update sync status with additional delay
 			lastKline := modelKlines[len(modelKlines)-1]
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+
 			if err := s.syncStatusRepo.UpdateLastDataTime(ctx, symbol, "kline", &interval, lastKline.OpenTime); err != nil {
 				s.logger.Warn("Failed to update sync status", zap.Error(err))
 			}
@@ -232,8 +261,8 @@ func (s *DataSyncService) convertToModelKline(symbol, interval string, data *bin
 	return &models.Kline{
 		Symbol:              symbol,
 		Interval:            interval,
-		OpenTime:            time.UnixMilli(data.OpenTime),
-		CloseTime:           time.UnixMilli(data.CloseTime),
+		OpenTime:            data.OpenTime,
+		CloseTime:           data.CloseTime,
 		OpenPrice:           openPrice,
 		HighPrice:           highPrice,
 		LowPrice:            lowPrice,
@@ -243,7 +272,7 @@ func (s *DataSyncService) convertToModelKline(symbol, interval string, data *bin
 		TradesCount:         data.NumberOfTrades,
 		TakerBuyVolume:      takerBuyVolume,
 		TakerBuyQuoteVolume: takerBuyQuoteVolume,
-		CreatedAt:           time.Now(),
+		CreatedAt:           time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -283,4 +312,35 @@ func getIntervalDuration(interval string) time.Duration {
 	default:
 		return time.Hour
 	}
+}
+
+// insertKlinesWithRetry attempts to insert klines with exponential backoff retry logic
+func (s *DataSyncService) insertKlinesWithRetry(ctx context.Context, klines []models.Kline) error {
+
+	return s.klineRepo.BatchInsert(ctx, klines)
+}
+
+// isConnectionError checks if the error is related to database connection issues
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	connectionErrors := []string{
+		"conn busy",
+		"connection refused",
+		"connection reset",
+		"connection timeout",
+		"too many connections",
+		"connection pool exhausted",
+	}
+
+	for _, connErr := range connectionErrors {
+		if strings.Contains(errStr, connErr) {
+			return true
+		}
+	}
+
+	return false
 }

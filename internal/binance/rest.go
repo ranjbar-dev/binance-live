@@ -233,7 +233,7 @@ func (c *RESTClient) GetServerTime(ctx context.Context) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("failed to unmarshal server time: %w", err)
 	}
 
-	return TimestampToTime(result.ServerTime), nil
+	return time.UnixMilli(result.ServerTime), nil
 }
 
 // Ping tests connectivity to the REST API

@@ -19,6 +19,10 @@ COPY . .
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /binance-live ./cmd/server
 
+FROM builder AS dev
+
+CMD ["go", "run", "./cmd/server", "-config", "/app/config/config.yaml"]
+
 # Final stage
 FROM alpine:latest
 

@@ -18,18 +18,23 @@ type Database struct {
 
 // New creates a new database connection pool
 func New(cfg *config.DatabaseConfig, logger *zap.Logger) (*Database, error) {
+	
 	// Build connection string
 	dsn := cfg.GetDSN()
 
 	// Configure connection pool
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
+
 		return nil, fmt.Errorf("failed to parse database config: %w", err)
 	}
 
+	// Configure connection pool settings
 	poolConfig.MaxConns = int32(cfg.MaxConnections)
 	poolConfig.MinConns = int32(cfg.MaxIdleConnections)
 	poolConfig.MaxConnLifetime = time.Duration(cfg.ConnectionMaxLifetime) * time.Second
+	poolConfig.MaxConnIdleTime = 30 * time.Second
+	poolConfig.HealthCheckPeriod = 30 * time.Second
 
 	// Create connection pool
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -37,11 +42,13 @@ func New(cfg *config.DatabaseConfig, logger *zap.Logger) (*Database, error) {
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
+
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}
 
 	// Test connection
 	if err := pool.Ping(ctx); err != nil {
+
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
@@ -59,12 +66,14 @@ func New(cfg *config.DatabaseConfig, logger *zap.Logger) (*Database, error) {
 
 // Close closes the database connection pool
 func (db *Database) Close() {
+
 	db.Pool.Close()
 	db.logger.Info("Database connection closed")
 }
 
 // RunMigrations executes the database migrations
 func (db *Database) RunMigrations(ctx context.Context, migrationSQL string) error {
+
 	db.logger.Info("Running database migrations")
 
 	_, err := db.Pool.Exec(ctx, migrationSQL)
@@ -78,5 +87,6 @@ func (db *Database) RunMigrations(ctx context.Context, migrationSQL string) erro
 
 // HealthCheck checks if the database is accessible
 func (db *Database) HealthCheck(ctx context.Context) error {
+	
 	return db.Pool.Ping(ctx)
 }

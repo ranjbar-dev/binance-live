@@ -6,47 +6,42 @@ import (
 	"time"
 
 	"github.com/binance-live/internal/database"
+	"github.com/binance-live/internal/db"
 	"github.com/binance-live/internal/models"
 	"github.com/jackc/pgx/v5"
 )
 
 // KlineRepository handles kline data operations
 type KlineRepository struct {
-	db *database.Database
+	database *database.Database
+	queries  *db.Queries
 }
 
 // NewKlineRepository creates a new kline repository
-func NewKlineRepository(db *database.Database) *KlineRepository {
-	return &KlineRepository{db: db}
+func NewKlineRepository(database *database.Database) *KlineRepository {
+	return &KlineRepository{
+		database: database,
+		queries:  db.New(database.Pool),
+	}
 }
 
 // Insert inserts a single kline record
 func (r *KlineRepository) Insert(ctx context.Context, kline *models.Kline) error {
-	query := `
-		INSERT INTO klines (
-			symbol, interval, open_time, close_time, open_price, high_price,
-			low_price, close_price, volume, quote_volume, trades_count,
-			taker_buy_volume, taker_buy_quote_volume
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (symbol, interval, open_time) DO UPDATE SET
-			close_time = EXCLUDED.close_time,
-			open_price = EXCLUDED.open_price,
-			high_price = EXCLUDED.high_price,
-			low_price = EXCLUDED.low_price,
-			close_price = EXCLUDED.close_price,
-			volume = EXCLUDED.volume,
-			quote_volume = EXCLUDED.quote_volume,
-			trades_count = EXCLUDED.trades_count,
-			taker_buy_volume = EXCLUDED.taker_buy_volume,
-			taker_buy_quote_volume = EXCLUDED.taker_buy_quote_volume
-	`
-
-	_, err := r.db.Pool.Exec(ctx, query,
-		kline.Symbol, kline.Interval, kline.OpenTime, kline.CloseTime,
-		kline.OpenPrice, kline.HighPrice, kline.LowPrice, kline.ClosePrice,
-		kline.Volume, kline.QuoteVolume, kline.TradesCount,
-		kline.TakerBuyVolume, kline.TakerBuyQuoteVolume,
-	)
+	err := r.queries.InsertKline(ctx, db.InsertKlineParams{
+		Symbol:              kline.Symbol,
+		Interval:            kline.Interval,
+		OpenTime:            kline.OpenTime,
+		CloseTime:           kline.CloseTime,
+		OpenPrice:           kline.OpenPrice,
+		HighPrice:           kline.HighPrice,
+		LowPrice:            kline.LowPrice,
+		ClosePrice:          kline.ClosePrice,
+		Volume:              kline.Volume,
+		QuoteVolume:         kline.QuoteVolume,
+		TradesCount:         int32(kline.TradesCount),
+		TakerBuyVolume:      kline.TakerBuyVolume,
+		TakerBuyQuoteVolume: kline.TakerBuyQuoteVolume,
+	})
 
 	if err != nil {
 		return fmt.Errorf("failed to insert kline: %w", err)
@@ -57,81 +52,105 @@ func (r *KlineRepository) Insert(ctx context.Context, kline *models.Kline) error
 
 // BatchInsert inserts multiple kline records in a single transaction
 func (r *KlineRepository) BatchInsert(ctx context.Context, klines []models.Kline) error {
+
 	if len(klines) == 0 {
 		return nil
 	}
 
-	tx, err := r.db.Pool.Begin(ctx)
+	// For large batches, process in smaller chunks to avoid long-running transactions
+	const maxBatchSize = 100 // Further reduced for better connection management
+	if len(klines) > maxBatchSize {
+
+		return r.batchInsertChunked(ctx, klines, maxBatchSize)
+	}
+
+	return r.executeBatchInsert(ctx, klines)
+}
+
+// batchInsertChunked processes large batches in smaller chunks with delays
+func (r *KlineRepository) batchInsertChunked(ctx context.Context, klines []models.Kline, chunkSize int) error {
+	for i := 0; i < len(klines); i += chunkSize {
+		end := i + chunkSize
+		if end > len(klines) {
+			end = len(klines)
+		}
+
+		// Add delay between chunks to prevent connection pool exhaustion
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+
+		chunk := klines[i:end]
+		if err := r.executeBatchInsert(ctx, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// executeBatchInsert executes a batch insert with proper transaction management
+func (r *KlineRepository) executeBatchInsert(ctx context.Context, klines []models.Kline) error {
+	// Add timeout context to prevent long-running transactions
+	txCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	tx, err := r.database.Pool.Begin(txCtx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
 
-	batch := &pgx.Batch{}
-	query := `
-		INSERT INTO klines (
-			symbol, interval, open_time, close_time, open_price, high_price,
-			low_price, close_price, volume, quote_volume, trades_count,
-			taker_buy_volume, taker_buy_quote_volume
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (symbol, interval, open_time) DO UPDATE SET
-			close_time = EXCLUDED.close_time,
-			open_price = EXCLUDED.open_price,
-			high_price = EXCLUDED.high_price,
-			low_price = EXCLUDED.low_price,
-			close_price = EXCLUDED.close_price,
-			volume = EXCLUDED.volume,
-			quote_volume = EXCLUDED.quote_volume,
-			trades_count = EXCLUDED.trades_count,
-			taker_buy_volume = EXCLUDED.taker_buy_volume,
-			taker_buy_quote_volume = EXCLUDED.taker_buy_quote_volume
-	`
+	// Use explicit rollback handling
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(context.Background()); rollbackErr != nil {
+				// Log rollback error but don't overwrite the original error
+			}
+		}
+	}()
+
+	// Use sqlc queries with transaction
+	txQueries := r.queries.WithTx(tx)
 
 	for _, kline := range klines {
-		batch.Queue(query,
-			kline.Symbol, kline.Interval, kline.OpenTime, kline.CloseTime,
-			kline.OpenPrice, kline.HighPrice, kline.LowPrice, kline.ClosePrice,
-			kline.Volume, kline.QuoteVolume, kline.TradesCount,
-			kline.TakerBuyVolume, kline.TakerBuyQuoteVolume,
-		)
-	}
-
-	br := tx.SendBatch(ctx, batch)
-	defer br.Close()
-
-	for range klines {
-		if _, err := br.Exec(); err != nil {
-			return fmt.Errorf("failed to execute batch: %w", err)
+		err := txQueries.InsertKline(txCtx, db.InsertKlineParams{
+			Symbol:              kline.Symbol,
+			Interval:            kline.Interval,
+			OpenTime:            kline.OpenTime,
+			CloseTime:           kline.CloseTime,
+			OpenPrice:           kline.OpenPrice,
+			HighPrice:           kline.HighPrice,
+			LowPrice:            kline.LowPrice,
+			ClosePrice:          kline.ClosePrice,
+			Volume:              kline.Volume,
+			QuoteVolume:         kline.QuoteVolume,
+			TradesCount:         int32(kline.TradesCount),
+			TakerBuyVolume:      kline.TakerBuyVolume,
+			TakerBuyQuoteVolume: kline.TakerBuyQuoteVolume,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to insert kline: %w", err)
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(txCtx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	committed = true
 	return nil
 }
 
 // GetLastKline retrieves the most recent kline for a symbol and interval
 func (r *KlineRepository) GetLastKline(ctx context.Context, symbol, interval string) (*models.Kline, error) {
-	query := `
-		SELECT symbol, interval, open_time, close_time, open_price, high_price,
-			   low_price, close_price, volume, quote_volume, trades_count,
-			   taker_buy_volume, taker_buy_quote_volume, created_at
-		FROM klines
-		WHERE symbol = $1 AND interval = $2
-		ORDER BY open_time DESC
-		LIMIT 1
-	`
-
-	var kline models.Kline
-	err := r.db.Pool.QueryRow(ctx, query, symbol, interval).Scan(
-		&kline.Symbol, &kline.Interval, &kline.OpenTime, &kline.CloseTime,
-		&kline.OpenPrice, &kline.HighPrice, &kline.LowPrice, &kline.ClosePrice,
-		&kline.Volume, &kline.QuoteVolume, &kline.TradesCount,
-		&kline.TakerBuyVolume, &kline.TakerBuyQuoteVolume, &kline.CreatedAt,
-	)
-
+	dbKline, err := r.queries.GetLastKline(ctx, db.GetLastKlineParams{
+		Symbol:   symbol,
+		Interval: interval,
+	})
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil // No data found
@@ -139,44 +158,58 @@ func (r *KlineRepository) GetLastKline(ctx context.Context, symbol, interval str
 		return nil, fmt.Errorf("failed to get last kline: %w", err)
 	}
 
-	return &kline, nil
+	return &models.Kline{
+		Symbol:              dbKline.Symbol,
+		Interval:            dbKline.Interval,
+		OpenTime:            dbKline.OpenTime,
+		CloseTime:           dbKline.CloseTime,
+		OpenPrice:           dbKline.OpenPrice,
+		HighPrice:           dbKline.HighPrice,
+		LowPrice:            dbKline.LowPrice,
+		ClosePrice:          dbKline.ClosePrice,
+		Volume:              dbKline.Volume,
+		QuoteVolume:         dbKline.QuoteVolume,
+		TradesCount:         int(dbKline.TradesCount),
+		TakerBuyVolume:      dbKline.TakerBuyVolume,
+		TakerBuyQuoteVolume: dbKline.TakerBuyQuoteVolume,
+		CreatedAt:           dbKline.CreatedAt,
+	}, nil
 }
 
 // GetKlinesByTimeRange retrieves klines within a time range
 func (r *KlineRepository) GetKlinesByTimeRange(
 	ctx context.Context,
 	symbol, interval string,
-	startTime, endTime time.Time,
+	startTime, endTime int64,
 ) ([]models.Kline, error) {
-	query := `
-		SELECT symbol, interval, open_time, close_time, open_price, high_price,
-			   low_price, close_price, volume, quote_volume, trades_count,
-			   taker_buy_volume, taker_buy_quote_volume, created_at
-		FROM klines
-		WHERE symbol = $1 AND interval = $2
-		  AND open_time >= $3 AND open_time < $4
-		ORDER BY open_time ASC
-	`
-
-	rows, err := r.db.Pool.Query(ctx, query, symbol, interval, startTime, endTime)
+	dbKlines, err := r.queries.GetKlinesByTimeRange(ctx, db.GetKlinesByTimeRangeParams{
+		Symbol:     symbol,
+		Interval:   interval,
+		OpenTime:   startTime,
+		OpenTime_2: endTime,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query klines: %w", err)
 	}
-	defer rows.Close()
 
-	var klines []models.Kline
-	for rows.Next() {
-		var kline models.Kline
-		err := rows.Scan(
-			&kline.Symbol, &kline.Interval, &kline.OpenTime, &kline.CloseTime,
-			&kline.OpenPrice, &kline.HighPrice, &kline.LowPrice, &kline.ClosePrice,
-			&kline.Volume, &kline.QuoteVolume, &kline.TradesCount,
-			&kline.TakerBuyVolume, &kline.TakerBuyQuoteVolume, &kline.CreatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan kline: %w", err)
-		}
-		klines = append(klines, kline)
+	klines := make([]models.Kline, 0, len(dbKlines))
+	for _, dbKline := range dbKlines {
+		klines = append(klines, models.Kline{
+			Symbol:              dbKline.Symbol,
+			Interval:            dbKline.Interval,
+			OpenTime:            dbKline.OpenTime,
+			CloseTime:           dbKline.CloseTime,
+			OpenPrice:           dbKline.OpenPrice,
+			HighPrice:           dbKline.HighPrice,
+			LowPrice:            dbKline.LowPrice,
+			ClosePrice:          dbKline.ClosePrice,
+			Volume:              dbKline.Volume,
+			QuoteVolume:         dbKline.QuoteVolume,
+			TradesCount:         int(dbKline.TradesCount),
+			TakerBuyVolume:      dbKline.TakerBuyVolume,
+			TakerBuyQuoteVolume: dbKline.TakerBuyQuoteVolume,
+			CreatedAt:           dbKline.CreatedAt,
+		})
 	}
 
 	return klines, nil

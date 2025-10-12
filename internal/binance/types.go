@@ -1,7 +1,5 @@
 package binance
 
-import "time"
-
 // KlineResponse represents a kline/candlestick from Binance API
 type KlineResponse []interface{}
 
@@ -188,9 +186,4 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return e.Message
-}
-
-// Helper to convert timestamp to time.Time
-func TimestampToTime(ts int64) time.Time {
-	return time.Unix(0, ts*int64(time.Millisecond))
 }

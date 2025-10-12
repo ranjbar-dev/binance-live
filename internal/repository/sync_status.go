@@ -2,22 +2,27 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/binance-live/internal/database"
+	"github.com/binance-live/internal/db"
 	"github.com/binance-live/internal/models"
 	"github.com/jackc/pgx/v5"
 )
 
 // SyncStatusRepository handles sync status operations
 type SyncStatusRepository struct {
-	db *database.Database
+	database *database.Database
+	queries  *db.Queries
 }
 
 // NewSyncStatusRepository creates a new sync status repository
-func NewSyncStatusRepository(db *database.Database) *SyncStatusRepository {
-	return &SyncStatusRepository{db: db}
+func NewSyncStatusRepository(database *database.Database) *SyncStatusRepository {
+	return &SyncStatusRepository{
+		database: database,
+		queries:  db.New(database.Pool),
+	}
 }
 
 // GetSyncStatus retrieves the sync status for a symbol and data type
@@ -26,20 +31,16 @@ func (r *SyncStatusRepository) GetSyncStatus(
 	symbol, dataType string,
 	interval *string,
 ) (*models.SyncStatus, error) {
-	query := `
-		SELECT symbol, data_type, interval, last_sync_time, last_data_time,
-			   status, error_message, updated_at
-		FROM sync_status
-		WHERE symbol = $1 AND data_type = $2 AND COALESCE(interval, '') = COALESCE($3, '')
-	`
+	var intervalParam sql.NullString
+	if interval != nil {
+		intervalParam = sql.NullString{String: *interval, Valid: true}
+	}
 
-	var status models.SyncStatus
-	err := r.db.Pool.QueryRow(ctx, query, symbol, dataType, interval).Scan(
-		&status.Symbol, &status.DataType, &status.Interval,
-		&status.LastSyncTime, &status.LastDataTime,
-		&status.Status, &status.ErrorMessage, &status.UpdatedAt,
-	)
-
+	dbStatus, err := r.queries.GetSyncStatus(ctx, db.GetSyncStatusParams{
+		Symbol:   symbol,
+		DataType: dataType,
+		Interval: intervalParam,
+	})
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil // No sync status found
@@ -47,28 +48,46 @@ func (r *SyncStatusRepository) GetSyncStatus(
 		return nil, fmt.Errorf("failed to get sync status: %w", err)
 	}
 
-	return &status, nil
+	status := &models.SyncStatus{
+		Symbol:       dbStatus.Symbol,
+		DataType:     dbStatus.DataType,
+		LastSyncTime: dbStatus.LastSyncTime,
+		LastDataTime: dbStatus.LastDataTime,
+		Status:       dbStatus.Status,
+		UpdatedAt:    dbStatus.UpdatedAt,
+	}
+
+	if dbStatus.Interval.Valid {
+		status.Interval = &dbStatus.Interval.String
+	}
+	if dbStatus.ErrorMessage.Valid {
+		status.ErrorMessage = &dbStatus.ErrorMessage.String
+	}
+
+	return status, nil
 }
 
 // UpsertSyncStatus inserts or updates sync status
 func (r *SyncStatusRepository) UpsertSyncStatus(ctx context.Context, status *models.SyncStatus) error {
-	query := `
-		INSERT INTO sync_status (
-			symbol, data_type, interval, last_sync_time, last_data_time, status, error_message
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (symbol, data_type, COALESCE(interval, '')) DO UPDATE SET
-			last_sync_time = EXCLUDED.last_sync_time,
-			last_data_time = EXCLUDED.last_data_time,
-			status = EXCLUDED.status,
-			error_message = EXCLUDED.error_message,
-			updated_at = CURRENT_TIMESTAMP
-	`
+	var intervalParam sql.NullString
+	if status.Interval != nil {
+		intervalParam = sql.NullString{String: *status.Interval, Valid: true}
+	}
 
-	_, err := r.db.Pool.Exec(ctx, query,
-		status.Symbol, status.DataType, status.Interval,
-		status.LastSyncTime, status.LastDataTime,
-		status.Status, status.ErrorMessage,
-	)
+	var errorMessageParam sql.NullString
+	if status.ErrorMessage != nil {
+		errorMessageParam = sql.NullString{String: *status.ErrorMessage, Valid: true}
+	}
+
+	err := r.queries.UpsertSyncStatus(ctx, db.UpsertSyncStatusParams{
+		Symbol:       status.Symbol,
+		DataType:     status.DataType,
+		Interval:     intervalParam,
+		LastSyncTime: status.LastSyncTime,
+		LastDataTime: status.LastDataTime,
+		Status:       status.Status,
+		ErrorMessage: errorMessageParam,
+	})
 
 	if err != nil {
 		return fmt.Errorf("failed to upsert sync status: %w", err)
@@ -82,19 +101,19 @@ func (r *SyncStatusRepository) UpdateLastDataTime(
 	ctx context.Context,
 	symbol, dataType string,
 	interval *string,
-	lastDataTime time.Time,
+	lastDataTime int64,
 ) error {
-	query := `
-		UPDATE sync_status
-		SET last_data_time = $1,
-			last_sync_time = CURRENT_TIMESTAMP,
-			status = 'active',
-			error_message = NULL,
-			updated_at = CURRENT_TIMESTAMP
-		WHERE symbol = $2 AND data_type = $3 AND COALESCE(interval, '') = COALESCE($4, '')
-	`
+	var intervalParam sql.NullString
+	if interval != nil {
+		intervalParam = sql.NullString{String: *interval, Valid: true}
+	}
 
-	_, err := r.db.Pool.Exec(ctx, query, lastDataTime, symbol, dataType, interval)
+	err := r.queries.UpdateLastDataTime(ctx, db.UpdateLastDataTimeParams{
+		Symbol:       symbol,
+		DataType:     dataType,
+		Interval:     intervalParam,
+		LastDataTime: lastDataTime,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to update last data time: %w", err)
 	}
@@ -104,32 +123,29 @@ func (r *SyncStatusRepository) UpdateLastDataTime(
 
 // GetAllSyncStatuses retrieves all sync statuses for active symbols
 func (r *SyncStatusRepository) GetAllSyncStatuses(ctx context.Context) ([]models.SyncStatus, error) {
-	query := `
-		SELECT s.symbol, s.data_type, s.interval, s.last_sync_time, s.last_data_time,
-			   s.status, s.error_message, s.updated_at
-		FROM sync_status s
-		INNER JOIN symbols sym ON s.symbol = sym.symbol
-		WHERE sym.is_active = true
-		ORDER BY s.symbol, s.data_type, s.interval
-	`
-
-	rows, err := r.db.Pool.Query(ctx, query)
+	dbStatuses, err := r.queries.GetAllSyncStatuses(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sync statuses: %w", err)
 	}
-	defer rows.Close()
 
-	var statuses []models.SyncStatus
-	for rows.Next() {
-		var status models.SyncStatus
-		err := rows.Scan(
-			&status.Symbol, &status.DataType, &status.Interval,
-			&status.LastSyncTime, &status.LastDataTime,
-			&status.Status, &status.ErrorMessage, &status.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan sync status: %w", err)
+	statuses := make([]models.SyncStatus, 0, len(dbStatuses))
+	for _, dbStatus := range dbStatuses {
+		status := models.SyncStatus{
+			Symbol:       dbStatus.Symbol,
+			DataType:     dbStatus.DataType,
+			LastSyncTime: dbStatus.LastSyncTime,
+			LastDataTime: dbStatus.LastDataTime,
+			Status:       dbStatus.Status,
+			UpdatedAt:    dbStatus.UpdatedAt,
 		}
+
+		if dbStatus.Interval.Valid {
+			status.Interval = &dbStatus.Interval.String
+		}
+		if dbStatus.ErrorMessage.Valid {
+			status.ErrorMessage = &dbStatus.ErrorMessage.String
+		}
+
 		statuses = append(statuses, status)
 	}
 
