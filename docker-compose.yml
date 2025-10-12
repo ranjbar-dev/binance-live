@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # TimescaleDB (PostgreSQL with TimescaleDB extension)
   timescaledb:
-    image: timescale/timescaledb:latest-pg15
+    image: timescale/timescaledb:latest-pg17
     container_name: binance-timescaledb
     restart: unless-stopped
     environment:
@@ -23,16 +23,20 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis for live data publishing
-  redis:
-    image: redis:7-alpine
-    container_name: binance-redis
+  # DragonflyDB for live data publishing (Redis-compatible)
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    container_name: binance-dragonfly
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    ulimits:
+      memlock: -1
+    command: >
+      --requirepass=${REDIS_PASSWORD:-}
+      --snapshot_cron="*/5 * * * *"
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - dragonfly_data:/data
     networks:
       - binance-network
     healthcheck:
@@ -51,7 +55,7 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      redis:
+      dragonfly:
         condition: service_healthy
     environment:
       # Database configuration
@@ -61,8 +65,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-binance_data}
       
-      # Redis configuration
-      REDIS_HOST: redis
+      # DragonflyDB configuration (Redis-compatible)
+      REDIS_HOST: dragonfly
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       
@@ -80,38 +84,18 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Optional: Redis Commander for monitoring Redis
+  # Optional: Redis Commander for monitoring DragonflyDB
   redis-commander:
     image: rediscommander/redis-commander:latest
     container_name: binance-redis-commander
     restart: unless-stopped
     depends_on:
-      - redis
+      - dragonfly
     environment:
-      REDIS_HOSTS: local:redis:6379
+      REDIS_HOSTS: local:dragonfly:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     ports:
       - "8081:8081"
-    networks:
-      - binance-network
-    profiles:
-      - tools
-
-  # Optional: pgAdmin for database management
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: binance-pgadmin
-    restart: unless-stopped
-    depends_on:
-      - timescaledb
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
-    ports:
-      - "5050:80"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
     networks:
       - binance-network
     profiles:
@@ -124,8 +108,6 @@ networks:
 volumes:
   timescaledb_data:
     driver: local
-  redis_data:
-    driver: local
-  pgadmin_data:
+  dragonfly_data:
     driver: local
 
