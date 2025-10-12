@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -214,7 +213,7 @@ func (s *DataSyncService) syncKlinesForSymbol(ctx context.Context, symbol, inter
 		// Batch insert klines with retry logic and rate limiting
 		if len(modelKlines) > 0 {
 
-			if err := s.insertKlinesWithRetry(ctx, modelKlines); err != nil {
+			if err := s.klineRepo.BatchInsert(ctx, modelKlines); err != nil {
 
 				return fmt.Errorf("failed to insert klines: %w", err)
 			}
@@ -312,35 +311,4 @@ func getIntervalDuration(interval string) time.Duration {
 	default:
 		return time.Hour
 	}
-}
-
-// insertKlinesWithRetry attempts to insert klines with exponential backoff retry logic
-func (s *DataSyncService) insertKlinesWithRetry(ctx context.Context, klines []models.Kline) error {
-
-	return s.klineRepo.BatchInsert(ctx, klines)
-}
-
-// isConnectionError checks if the error is related to database connection issues
-func isConnectionError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := err.Error()
-	connectionErrors := []string{
-		"conn busy",
-		"connection refused",
-		"connection reset",
-		"connection timeout",
-		"too many connections",
-		"connection pool exhausted",
-	}
-
-	for _, connErr := range connectionErrors {
-		if strings.Contains(errStr, connErr) {
-			return true
-		}
-	}
-
-	return false
 }

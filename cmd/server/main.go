@@ -24,11 +24,13 @@ var (
 )
 
 func main() {
+
 	flag.Parse()
 
 	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
+
 		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)
 	}
@@ -36,6 +38,7 @@ func main() {
 	// Initialize logger
 	log, err := logger.New(cfg.App.LogLevel, cfg.App.Environment)
 	if err != nil {
+
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
@@ -52,6 +55,7 @@ func main() {
 
 	// Run application
 	if err := run(ctx, cfg, log); err != nil {
+
 		log.Fatal("Application error", zap.Error(err))
 	}
 
@@ -59,6 +63,7 @@ func main() {
 }
 
 func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
+
 	// Create a cancellable context for this run
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -67,6 +72,7 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 	log.Info("Connecting to database...")
 	db, err := database.New(&cfg.Database, log)
 	if err != nil {
+
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 	defer db.Close()
@@ -74,9 +80,12 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 	// Run migrations
 	migrationSQL, err := os.ReadFile("migrations/001_init.sql")
 	if err != nil {
+
 		log.Warn("Failed to read migration file", zap.Error(err))
 	} else {
+
 		if err := db.RunMigrations(ctx, string(migrationSQL)); err != nil {
+
 			return fmt.Errorf("failed to run migrations: %w", err)
 		}
 	}
@@ -85,6 +94,7 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 	log.Info("Connecting to Redis...")
 	redisClient, err := redis.New(&cfg.Redis, log)
 	if err != nil {
+
 		return fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 	defer redisClient.Close()
@@ -104,6 +114,7 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 	// Test Binance API connectivity
 	log.Info("Testing Binance API connectivity...")
 	if err := binanceClient.REST.Ping(ctx); err != nil {
+
 		return fmt.Errorf("failed to connect to Binance API: %w", err)
 	}
 	log.Info("Binance API connection established")
@@ -115,6 +126,7 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 	}
 
 	if len(symbols) == 0 {
+
 		log.Warn("No active symbols found in database")
 		return fmt.Errorf("no active symbols configured")
 	}
@@ -123,20 +135,21 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 
 	// Publish active symbols to Redis
 	if err := pub.PublishAllSymbols(ctx, symbols); err != nil {
+
 		log.Warn("Failed to publish symbols to Redis", zap.Error(err))
 	}
 
 	// Initialize services
-	syncService := service.NewDataSyncService(
-		binanceClient,
-		symbolRepo,
-		klineRepo,
-		tickerRepo,
-		syncStatusRepo,
-		&cfg.Sync,
-		&cfg.Binance,
-		log,
-	)
+	// syncService := service.NewDataSyncService(
+	// 	binanceClient,
+	// 	symbolRepo,
+	// 	klineRepo,
+	// 	tickerRepo,
+	// 	syncStatusRepo,
+	// 	&cfg.Sync,
+	// 	&cfg.Binance,
+	// 	log,
+	// )
 
 	streamService := service.NewStreamService(
 		binanceClient,
@@ -148,17 +161,18 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 	)
 
 	// Synchronize missing data
-	if cfg.Sync.Enabled {
-		log.Info("Starting data synchronization...")
-		if err := syncService.SyncMissingData(ctx); err != nil {
-			log.Error("Data synchronization failed", zap.Error(err))
-			// Continue anyway - we can still stream live data
-		}
-	}
+	// if cfg.Sync.Enabled {
+	// 	log.Info("Starting data synchronization...")
+	// 	if err := syncService.SyncMissingData(ctx); err != nil {
+	// 		log.Error("Data synchronization failed", zap.Error(err))
+	// 		// Continue anyway - we can still stream live data
+	// 	}
+	// }
 
 	// Start live data streaming
 	log.Info("Starting live data streaming...")
 	if err := streamService.Start(ctx, symbols); err != nil {
+
 		return fmt.Errorf("failed to start streaming: %w", err)
 	}
 
@@ -176,6 +190,7 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 
 	// Stop streaming service
 	if err := streamService.Stop(); err != nil {
+
 		log.Error("Error stopping stream service", zap.Error(err))
 	}
 
