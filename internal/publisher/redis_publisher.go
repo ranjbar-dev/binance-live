@@ -9,22 +9,36 @@ import (
 	"go.uber.org/zap"
 )
 
-// Publisher handles publishing live data to Redis
-type Publisher struct {
+// Publisher interface defines the contract for publishing live data
+type Publisher interface {
+	PublishKline(ctx context.Context, kline *models.Kline) error
+	PublishTicker(ctx context.Context, ticker *models.Ticker) error
+	PublishDepth(ctx context.Context, depth *models.DepthSnapshot) error
+	PublishTrade(ctx context.Context, trade *models.Trade) error
+	PublishAllSymbols(ctx context.Context, symbols []models.Symbol) error
+}
+
+// JSONPublisher handles publishing live data to Redis using JSON
+type JSONPublisher struct {
 	redis  *redis.Client
 	logger *zap.Logger
 }
 
-// New creates a new publisher
-func New(redisClient *redis.Client, logger *zap.Logger) *Publisher {
-	return &Publisher{
+// NewJSONPublisher creates a new JSON publisher
+func NewJSONPublisher(redisClient *redis.Client, logger *zap.Logger) *JSONPublisher {
+	return &JSONPublisher{
 		redis:  redisClient,
 		logger: logger,
 	}
 }
 
+// New creates a new publisher (defaults to protobuf for better performance)
+func New(redisClient *redis.Client, logger *zap.Logger) Publisher {
+	return NewProtobufPublisher(redisClient, logger)
+}
+
 // PublishKline publishes kline data to Redis
-func (p *Publisher) PublishKline(ctx context.Context, kline *models.Kline) error {
+func (p *JSONPublisher) PublishKline(ctx context.Context, kline *models.Kline) error {
 	// Create live data structure
 	liveData := models.LiveData{
 		Type:      "kline",
@@ -66,7 +80,7 @@ func (p *Publisher) PublishKline(ctx context.Context, kline *models.Kline) error
 }
 
 // PublishTicker publishes ticker data to Redis
-func (p *Publisher) PublishTicker(ctx context.Context, ticker *models.Ticker) error {
+func (p *JSONPublisher) PublishTicker(ctx context.Context, ticker *models.Ticker) error {
 	liveData := models.LiveData{
 		Type:      "ticker",
 		Symbol:    ticker.Symbol,
@@ -106,7 +120,7 @@ func (p *Publisher) PublishTicker(ctx context.Context, ticker *models.Ticker) er
 }
 
 // PublishDepth publishes depth data to Redis
-func (p *Publisher) PublishDepth(ctx context.Context, depth *models.DepthSnapshot) error {
+func (p *JSONPublisher) PublishDepth(ctx context.Context, depth *models.DepthSnapshot) error {
 	liveData := models.LiveData{
 		Type:      "depth",
 		Symbol:    depth.Symbol,
@@ -137,7 +151,7 @@ func (p *Publisher) PublishDepth(ctx context.Context, depth *models.DepthSnapsho
 }
 
 // PublishTrade publishes trade data to Redis
-func (p *Publisher) PublishTrade(ctx context.Context, trade *models.Trade) error {
+func (p *JSONPublisher) PublishTrade(ctx context.Context, trade *models.Trade) error {
 	liveData := models.LiveData{
 		Type:      "trade",
 		Symbol:    trade.Symbol,
@@ -161,7 +175,7 @@ func (p *Publisher) PublishTrade(ctx context.Context, trade *models.Trade) error
 }
 
 // PublishAllSymbols publishes the list of all active symbols
-func (p *Publisher) PublishAllSymbols(ctx context.Context, symbols []models.Symbol) error {
+func (p *JSONPublisher) PublishAllSymbols(ctx context.Context, symbols []models.Symbol) error {
 	symbolList := make([]string, len(symbols))
 	for i, s := range symbols {
 		symbolList[i] = s.Symbol

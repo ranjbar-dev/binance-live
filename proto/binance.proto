@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package binance;
+
+option go_package = "github.com/binance-live/proto/binance";
+
+// Live data types
+enum DataType {
+  DATA_TYPE_UNSPECIFIED = 0;
+  DATA_TYPE_KLINE = 1;
+  DATA_TYPE_TICKER = 2;
+  DATA_TYPE_DEPTH = 3;
+  DATA_TYPE_TRADE = 4;
+}
+
+// Kline data structure
+message KlineData {
+  string interval = 1;
+  int64 open_time = 2;        // Unix timestamp in seconds
+  int64 close_time = 3;       // Unix timestamp in seconds
+  double open_price = 4;
+  double high_price = 5;
+  double low_price = 6;
+  double close_price = 7;
+  double volume = 8;
+  double quote_volume = 9;
+  int32 trades_count = 10;
+  double taker_buy_volume = 11;
+  double taker_buy_quote_volume = 12;
+}
+
+// Ticker data structure
+message TickerData {
+  double price = 1;
+  optional double bid_price = 2;
+  optional double bid_qty = 3;
+  optional double ask_price = 4;
+  optional double ask_qty = 5;
+  optional double volume_24h = 6;
+  optional double quote_volume_24h = 7;
+  optional double price_change_24h = 8;
+  optional double price_change_percent_24h = 9;
+  optional double high_24h = 10;
+  optional double low_24h = 11;
+  optional int32 trades_count_24h = 12;
+}
+
+// Depth data structure
+message DepthData {
+  int64 last_update_id = 1;
+  repeated PriceLevel bids = 2;
+  repeated PriceLevel asks = 3;
+}
+
+// Price level for depth data
+message PriceLevel {
+  double price = 1;
+  double quantity = 2;
+}
+
+// Trade data structure
+message TradeData {
+  int64 trade_id = 1;
+  double price = 2;
+  double quantity = 3;
+  double quote_quantity = 4;
+  bool is_buyer_maker = 5;
+}
+
+// Main live data message
+message LiveData {
+  DataType type = 1;
+  string symbol = 2;
+  int64 timestamp = 3;        // Unix timestamp in milliseconds
+  
+  oneof data {
+    KlineData kline = 4;
+    TickerData ticker = 5;
+    DepthData depth = 6;
+    TradeData trade = 7;
+  }
+}
+
+// Symbol list message
+message SymbolList {
+  repeated string symbols = 1;
+  int64 timestamp = 2;        // When the list was generated
+}

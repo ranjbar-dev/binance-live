@@ -20,7 +20,7 @@ type StreamService struct {
 	klineRepo      *repository.KlineRepository
 	tickerRepo     *repository.TickerRepository
 	syncStatusRepo *repository.SyncStatusRepository
-	publisher      *publisher.Publisher
+	publisher      publisher.Publisher
 	logger         *zap.Logger
 }
 
@@ -38,7 +38,7 @@ func NewStreamService(
 		klineRepo:      klineRepo,
 		tickerRepo:     tickerRepo,
 		syncStatusRepo: syncStatusRepo,
-		publisher:      pub,
+		publisher:      *pub,
 		logger:         logger,
 	}
 }

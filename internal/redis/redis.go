@@ -9,6 +9,7 @@ import (
 	"github.com/binance-live/internal/config"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 // Client wraps the Redis client
@@ -65,6 +66,20 @@ func (c *Client) PublishJSON(ctx context.Context, channel string, data interface
 	return nil
 }
 
+// PublishProtobuf publishes a protobuf message to a channel
+func (c *Client) PublishProtobuf(ctx context.Context, channel string, data proto.Message) error {
+	protoData, err := proto.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal protobuf data: %w", err)
+	}
+
+	if err := c.client.Publish(ctx, channel, protoData).Err(); err != nil {
+		return fmt.Errorf("failed to publish to Redis: %w", err)
+	}
+
+	return nil
+}
+
 // SetJSON sets a key with JSON value and TTL
 func (c *Client) SetJSON(ctx context.Context, key string, data interface{}, ttl time.Duration) error {
 	jsonData, err := json.Marshal(data)
@@ -83,6 +98,24 @@ func (c *Client) SetJSON(ctx context.Context, key string, data interface{}, ttl 
 	return nil
 }
 
+// SetProtobuf sets a key with protobuf value and TTL
+func (c *Client) SetProtobuf(ctx context.Context, key string, data proto.Message, ttl time.Duration) error {
+	protoData, err := proto.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal protobuf data: %w", err)
+	}
+
+	if ttl == 0 {
+		ttl = c.ttl
+	}
+
+	if err := c.client.Set(ctx, key, protoData, ttl).Err(); err != nil {
+		return fmt.Errorf("failed to set key in Redis: %w", err)
+	}
+
+	return nil
+}
+
 // GetJSON gets a key and unmarshals JSON value
 func (c *Client) GetJSON(ctx context.Context, key string, dest interface{}) error {
 	val, err := c.client.Get(ctx, key).Result()
@@ -95,6 +128,23 @@ func (c *Client) GetJSON(ctx context.Context, key string, dest interface{}) erro
 
 	if err := json.Unmarshal([]byte(val), dest); err != nil {
 		return fmt.Errorf("failed to unmarshal data: %w", err)
+	}
+
+	return nil
+}
+
+// GetProtobuf gets a key and unmarshals protobuf value
+func (c *Client) GetProtobuf(ctx context.Context, key string, dest proto.Message) error {
+	val, err := c.client.Get(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return fmt.Errorf("key not found: %s", key)
+		}
+		return fmt.Errorf("failed to get key from Redis: %w", err)
+	}
+
+	if err := proto.Unmarshal([]byte(val), dest); err != nil {
+		return fmt.Errorf("failed to unmarshal protobuf data: %w", err)
 	}
 
 	return nil

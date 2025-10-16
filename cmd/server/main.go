@@ -156,7 +156,7 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 		klineRepo,
 		tickerRepo,
 		syncStatusRepo,
-		pub,
+		&pub,
 		log,
 	)
 
