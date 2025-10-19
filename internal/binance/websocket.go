@@ -32,6 +32,7 @@ type WSHandler func(message []byte) error
 
 // NewWSClient creates a new WebSocket client
 func NewWSClient(cfg *config.BinanceConfig, streamCfg *config.StreamConfig, logger *zap.Logger) *WSClient {
+
 	return &WSClient{
 		baseURL:              cfg.WSURL,
 		logger:               logger,
@@ -46,6 +47,7 @@ func NewWSClient(cfg *config.BinanceConfig, streamCfg *config.StreamConfig, logg
 
 // Connect establishes a WebSocket connection with streams
 func (c *WSClient) Connect(ctx context.Context, streams []string) error {
+
 	streamPath := strings.Join(streams, "/")
 	url := fmt.Sprintf("%s/stream?streams=%s", c.baseURL, streamPath)
 
@@ -53,6 +55,7 @@ func (c *WSClient) Connect(ctx context.Context, streams []string) error {
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, url, nil)
 	if err != nil {
+
 		return fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}
 
@@ -66,9 +69,11 @@ func (c *WSClient) Connect(ctx context.Context, streams []string) error {
 
 // Start starts the WebSocket client with automatic reconnection
 func (c *WSClient) Start(ctx context.Context, streams []string) error {
+
 	attempt := 0
 
 	for {
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -79,8 +84,10 @@ func (c *WSClient) Start(ctx context.Context, streams []string) error {
 
 		// Connect
 		if err := c.Connect(ctx, streams); err != nil {
+
 			attempt++
 			if attempt >= c.maxReconnectAttempts {
+
 				return fmt.Errorf("max reconnect attempts reached: %w", err)
 			}
 
@@ -102,16 +109,20 @@ func (c *WSClient) Start(ctx context.Context, streams []string) error {
 
 		// Start reading messages
 		if err := c.readMessages(ctx); err != nil {
+
 			c.logger.Error("WebSocket read error", zap.Error(err))
 			c.closeConnection()
 
 			// Wait before reconnecting
 			select {
 			case <-ctx.Done():
+
 				return ctx.Err()
 			case <-c.stopChan:
+
 				return nil
 			case <-time.After(c.reconnectDelay):
+
 				c.logger.Info("Attempting to reconnect...")
 			}
 		}
@@ -120,11 +131,14 @@ func (c *WSClient) Start(ctx context.Context, streams []string) error {
 
 // readMessages reads and processes incoming WebSocket messages
 func (c *WSClient) readMessages(ctx context.Context) error {
+
 	for {
 		select {
 		case <-ctx.Done():
+
 			return ctx.Err()
 		case <-c.stopChan:
+
 			return nil
 		default:
 		}
@@ -134,11 +148,13 @@ func (c *WSClient) readMessages(ctx context.Context) error {
 		c.mu.RUnlock()
 
 		if conn == nil {
+
 			return fmt.Errorf("connection is nil")
 		}
 
 		_, message, err := conn.ReadMessage()
 		if err != nil {
+
 			return fmt.Errorf("read message error: %w", err)
 		}
 
@@ -149,6 +165,7 @@ func (c *WSClient) readMessages(ctx context.Context) error {
 		}
 
 		if err := json.Unmarshal(message, &streamMsg); err != nil {
+
 			c.logger.Warn("Failed to unmarshal stream message",
 				zap.Error(err),
 				zap.String("message", string(message)),
@@ -162,7 +179,9 @@ func (c *WSClient) readMessages(ctx context.Context) error {
 		c.mu.RUnlock()
 
 		if exists {
+
 			if err := handler(streamMsg.Data); err != nil {
+				
 				c.logger.Error("Handler error",
 					zap.String("stream", streamMsg.Stream),
 					zap.Error(err),
@@ -174,26 +193,33 @@ func (c *WSClient) readMessages(ctx context.Context) error {
 
 // pingHandler sends periodic ping messages to keep connection alive
 func (c *WSClient) pingHandler(ctx context.Context) {
+
 	ticker := time.NewTicker(c.pingInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
+
 		case <-ctx.Done():
+
 			return
 		case <-c.stopChan:
+			
 			return
 		case <-ticker.C:
+
 			c.mu.RLock()
 			conn := c.conn
 			c.mu.RUnlock()
 
 			if conn != nil {
 				if err := conn.WriteControl(
+					
 					websocket.PingMessage,
 					[]byte{},
 					time.Now().Add(10*time.Second),
 				); err != nil {
+
 					c.logger.Warn("Failed to send ping", zap.Error(err))
 				}
 			}
@@ -203,6 +229,7 @@ func (c *WSClient) pingHandler(ctx context.Context) {
 
 // RegisterHandler registers a handler for a specific stream
 func (c *WSClient) RegisterHandler(stream string, handler WSHandler) {
+	
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.handlers[stream] = handler
@@ -210,21 +237,26 @@ func (c *WSClient) RegisterHandler(stream string, handler WSHandler) {
 
 // Close closes the WebSocket connection
 func (c *WSClient) Close() error {
+	
 	close(c.stopChan)
 	return c.closeConnection()
 }
 
 // closeConnection closes the underlying WebSocket connection
 func (c *WSClient) closeConnection() error {
+	
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.conn != nil {
+
 		err := c.conn.WriteMessage(
+
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 		)
 		if err != nil {
+
 			c.logger.Warn("Failed to send close message", zap.Error(err))
 		}
 
@@ -238,13 +270,16 @@ func (c *WSClient) closeConnection() error {
 
 // BuildStreamNames builds WebSocket stream names for symbols
 func BuildStreamNames(symbols []string, intervals []string) []string {
+
 	var streams []string
 
 	for _, symbol := range symbols {
+
 		symbolLower := strings.ToLower(symbol)
 
 		// Add kline streams for each interval
 		for _, interval := range intervals {
+
 			streams = append(streams, fmt.Sprintf("%s@kline_%s", symbolLower, interval))
 		}
 
@@ -263,8 +298,10 @@ func BuildStreamNames(symbols []string, intervals []string) []string {
 
 // GetStreamName extracts stream name from full stream path
 func GetStreamName(fullStream string) (symbol, streamType, interval string) {
+
 	parts := strings.Split(fullStream, "@")
 	if len(parts) < 2 {
+
 		return
 	}
 
@@ -273,6 +310,7 @@ func GetStreamName(fullStream string) (symbol, streamType, interval string) {
 
 	// Extract interval for kline streams
 	if strings.HasPrefix(streamType, "kline_") {
+		
 		interval = strings.TrimPrefix(streamType, "kline_")
 		streamType = "kline"
 	}

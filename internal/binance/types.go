@@ -5,6 +5,7 @@ type KlineResponse []interface{}
 
 // ParseKlineResponse parses a kline response into structured data
 func ParseKlineResponse(data KlineResponse) (*KlineData, error) {
+	
 	return &KlineData{
 		OpenTime:                 int64(data[0].(float64)),
 		Open:                     data[1].(string),

@@ -15,6 +15,7 @@ type Client struct {
 
 // NewClient creates a new Binance API client
 func NewClient(cfg *config.Config, logger *zap.Logger) *Client {
+
 	return &Client{
 		REST:      NewRESTClient(&cfg.Binance, logger),
 		WebSocket: NewWSClient(&cfg.Binance, &cfg.Stream, logger),
