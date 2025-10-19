@@ -36,15 +36,15 @@ redis:
   db: 0
   pool_size: 10
   # TTL for live data in seconds
-  live_data_ttl: 60
+  live_data_ttl: 300 # 5 minutes
 
 sync:
   # When service restarts, sync missing data
   enabled: true
   # Maximum hours to sync backwards
-  max_sync_hours: 24
+  max_sync_hours: 720 # 30 days
   # Batch size for historical data fetching (reduced to avoid large transactions)
-  batch_size: 200
+  batch_size: 10000
   # Concurrent workers for syncing (reduced to avoid connection pool exhaustion)
   workers: 10
 
@@ -53,5 +53,3 @@ stream:
   reconnect_delay: 5 # seconds
   max_reconnect_attempts: 10
   ping_interval: 30 # seconds
-  # Buffer size for channels
-  channel_buffer_size: 1000

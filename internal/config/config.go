@@ -68,7 +68,6 @@ type StreamConfig struct {
 	ReconnectDelay       int `mapstructure:"reconnect_delay"`
 	MaxReconnectAttempts int `mapstructure:"max_reconnect_attempts"`
 	PingInterval         int `mapstructure:"ping_interval"`
-	ChannelBufferSize    int `mapstructure:"channel_buffer_size"`
 }
 
 // Load reads configuration from file and environment variables
@@ -144,7 +143,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("stream.reconnect_delay", 5)
 	v.SetDefault("stream.max_reconnect_attempts", 10)
 	v.SetDefault("stream.ping_interval", 30)
-	v.SetDefault("stream.channel_buffer_size", 1000)
 }
 
 // GetDSN returns the PostgreSQL connection string
