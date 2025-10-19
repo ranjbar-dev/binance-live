@@ -1,13 +1,14 @@
 services:
+  
   # TimescaleDB (PostgreSQL with TimescaleDB extension)
   timescaledb:
-    image: timescale/timescaledb:latest-pg17
+    build:
+      context: ./deployments/timescaledb
+      dockerfile: Dockerfile
     container_name: binance-timescaledb
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
+    env_file:
+      - deployments/timescaledb/.env
     ports:
       - "5432:5432"
     volumes:
@@ -15,40 +16,35 @@ services:
       - ./deployments/timescaledb/init-scripts:/docker-entrypoint-initdb.d:ro
       - ./sql/schemas:/sql/schemas:ro
       - ./sql/seeds:/sql/seeds:ro
-    command: [
-      "postgres",
-      "-c", "max_connections=300",
-    ]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # DragonflyDB for live data publishing (Redis-compatible)
   dragonfly:
-    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    build:
+      context: ./deployments/dragonfly
+      dockerfile: Dockerfile
     container_name: binance-dragonfly
     restart: unless-stopped
     ulimits:
       memlock: -1
-    command: >
-      --requirepass=password
-      --snapshot_cron="*/5 * * * *"
     ports:
       - "6379:6379"
     volumes:
       - dragonfly_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3" 
 
   # Binance Live Data Collector Application
   app:
     build:
-      context: .
+      context: ./deployments/app
       dockerfile: Dockerfile
       target: dev
     container_name: binance-app
@@ -58,22 +54,8 @@ services:
         condition: service_healthy
       dragonfly:
         condition: service_healthy
-    environment:
-      # Database configuration
-      POSTGRES_HOST: timescaledb
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: data
-      
-      # DragonflyDB configuration (Redis-compatible)
-      REDIS_HOST: dragonfly
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: password
-      
-      # Application configuration
-      APP_ENV: development
-      LOG_LEVEL: info
+    env_file:
+      - deployments/app/.env
     volumes:
       - .:/app
     logging:

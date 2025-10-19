@@ -32,6 +32,3 @@ EXPOSE 5432
 # Health check
 HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
     CMD pg_isready -U postgres || exit 1
-
-# Use the default entrypoint from the base image
-# CMD will be set via docker-compose or command line

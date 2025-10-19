@@ -1,11 +1,11 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS base
+
+# Install build dependencies
+RUN apk add --no-cache git make
 
 # Set working directory
 WORKDIR /app
-
-# Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
 
 # Copy go mod files
 COPY go.mod go.sum ./
@@ -16,46 +16,41 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+FROM builder AS dev
+
+CMD ["go", "run", "./cmd/server", "-config", "/app/config/config.yaml"]
+
+FROM base as builder
+
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o binance-live ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /binance-live ./cmd/server
 
-# Build CLI tool
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o binance-cli ./cmd/cli
-
-# Production stage
+# Final stage
 FROM alpine:latest
 
-# Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata
+# Install ca-certificates for HTTPS
+RUN apk --no-cache add ca-certificates tzdata
 
-# Create app user
-RUN addgroup -g 1001 -S app && \
-    adduser -u 1001 -S app -G app
+# Create non-root user
+RUN addgroup -g 1000 appuser && \
+    adduser -D -u 1000 -G appuser appuser
 
-# Set working directory
 WORKDIR /app
 
-# Copy built binaries from builder stage
-COPY --from=builder /app/binance-live .
-COPY --from=builder /app/binance-cli .
+# Copy binary from builder
+COPY --from=builder /binance-live .
 
-# Copy configuration files
-COPY --from=builder /app/config ./config
-COPY --from=builder /app/migrations ./migrations
-COPY --from=builder /app/sql ./sql
-
-# Change ownership of the app directory
-RUN chown -R app:app /app
+# Copy configuration and migrations
+COPY --chown=appuser:appuser config/ ./config/
+COPY --chown=appuser:appuser migrations/ ./migrations/
 
 # Switch to non-root user
-USER app
+USER appuser
 
-# Expose port (if needed for health checks or metrics)
+# Expose port (if needed for future API)
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD echo "Health check placeholder - implement based on your needs"
+# Run the application
+ENTRYPOINT ["/app/binance-live"]
+CMD ["-config", "/app/config/config.yaml"]
 
-# Default command
-CMD ["./binance-live", "-config", "config/config.yaml"]
