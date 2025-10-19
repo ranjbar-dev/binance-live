@@ -77,19 +77,6 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 	}
 	defer db.Close()
 
-	// Run migrations
-	migrationSQL, err := os.ReadFile("migrations/001_init.sql")
-	if err != nil {
-
-		log.Warn("Failed to read migration file", zap.Error(err))
-	} else {
-
-		if err := db.RunMigrations(ctx, string(migrationSQL)); err != nil {
-
-			return fmt.Errorf("failed to run migrations: %w", err)
-		}
-	}
-
 	// Initialize Redis client
 	log.Info("Connecting to Redis...")
 	redisClient, err := redis.New(&cfg.Redis, log)
@@ -139,18 +126,6 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 		log.Warn("Failed to publish symbols to Redis", zap.Error(err))
 	}
 
-	// Initialize services
-	// syncService := service.NewDataSyncService(
-	// 	binanceClient,
-	// 	symbolRepo,
-	// 	klineRepo,
-	// 	tickerRepo,
-	// 	syncStatusRepo,
-	// 	&cfg.Sync,
-	// 	&cfg.Binance,
-	// 	log,
-	// )
-
 	streamService := service.NewStreamService(
 		binanceClient,
 		klineRepo,
@@ -159,15 +134,6 @@ func run(ctx context.Context, cfg *config.Config, log *zap.Logger) error {
 		&pub,
 		log,
 	)
-
-	// Synchronize missing data
-	// if cfg.Sync.Enabled {
-	// 	log.Info("Starting data synchronization...")
-	// 	if err := syncService.SyncMissingData(ctx); err != nil {
-	// 		log.Error("Data synchronization failed", zap.Error(err))
-	// 		// Continue anyway - we can still stream live data
-	// 	}
-	// }
 
 	// Start live data streaming
 	log.Info("Starting live data streaming...")

@@ -228,7 +228,17 @@ func (s *DataSyncService) syncKlinesForSymbol(ctx context.Context, symbol, inter
 			case <-time.After(50 * time.Millisecond):
 			}
 
-			if err := s.syncStatusRepo.UpdateLastDataTime(ctx, symbol, "kline", &interval, lastKline.OpenTime); err != nil {
+			if err := s.syncStatusRepo.UpsertSyncStatus(ctx, &models.SyncStatus{
+				Symbol:       symbol,
+				DataType:     "kline",
+				Interval:     &interval,
+				LastSyncTime: time.Now().UnixMilli(),
+				LastDataTime: lastKline.OpenTime,
+				Status:       "active",
+				ErrorMessage: nil,
+				UpdatedAt:    time.Now().UnixMilli(),
+			}); err != nil {
+				
 				s.logger.Warn("Failed to update sync status", zap.Error(err))
 			}
 		}

@@ -109,21 +109,22 @@ func (s *StreamService) handleKlineEvent(message []byte, symbol, interval string
 		return fmt.Errorf("failed to unmarshal kline event: %w", err)
 	}
 
-	// Only process closed klines
-	if !event.Kline.IsClosed {
-		return nil
-	}
-
 	// Convert to model
 	kline, err := s.convertWSKlineToModel(&event, symbol, interval)
 	if err != nil {
 		return fmt.Errorf("failed to convert kline: %w", err)
 	}
 
-	// Store in database
+	// Create context
 	ctx := context.Background()
-	if err := s.klineRepo.Insert(ctx, kline); err != nil {
-		s.logger.Error("Failed to insert kline", zap.Error(err))
+
+	// Only store closed klines in db
+	if event.Kline.IsClosed {
+
+		// Store in database
+		if err := s.klineRepo.Insert(ctx, kline); err != nil {
+			s.logger.Error("Failed to insert kline", zap.Error(err))
+		}
 	}
 
 	// Publish to Redis
@@ -132,7 +133,16 @@ func (s *StreamService) handleKlineEvent(message []byte, symbol, interval string
 	}
 
 	// Update sync status
-	if err := s.syncStatusRepo.UpdateLastDataTime(ctx, symbol, "kline", &interval, kline.OpenTime); err != nil {
+	if err := s.syncStatusRepo.UpsertSyncStatus(ctx, &models.SyncStatus{
+		Symbol:       symbol,
+		DataType:     "kline",
+		Interval:     &interval,
+		LastSyncTime: time.Now().UnixMilli(),
+		LastDataTime: kline.OpenTime,
+		Status:       "active",
+		ErrorMessage: nil,
+		UpdatedAt:    time.Now().UnixMilli(),
+	}); err != nil {
 		s.logger.Warn("Failed to update sync status", zap.Error(err))
 	}
 

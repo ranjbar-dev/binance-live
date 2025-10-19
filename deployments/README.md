@@ -99,8 +99,15 @@ services:
 - **Key Features**:
   - Based on official TimescaleDB image
   - Optimized PostgreSQL configuration for time-series workloads
-  - Custom initialization scripts support
+  - Automatic schema migration and data seeding on first startup
   - Performance tuning for high-volume data
+
+**Initialization Scripts**:
+The `timescaledb/init-scripts/` directory contains scripts that run automatically when the container first starts:
+1. `01-migrate-schemas.sh` - Creates all database tables from `sql/schemas/`
+2. `02-seed-data.sh` - Populates initial data from `sql/seeds/`
+
+These scripts execute in alphabetical order and only run once during initial database creation.
 
 ### DragonflyDB (`dragonfly/`)
 - **Purpose**: Redis-compatible in-memory database for live data publishing
